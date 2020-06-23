@@ -97,8 +97,8 @@ public:
     boost::gil::fill_pixels(image._view, blank);
 
     const double dZ = std::abs(z_max - z_min) / 2.;
-    const double dX = dX_horizontal / 2.;
-    const double dY = dY_horizontal / 2.;
+    const double dX = (dX_vertical + dX_horizontal) / 2.;
+    const double dY = (dY_vertical + dY_horizontal) / 2.;
 
     typedef std::array<double, 6> StartEndPoints;
     std::list<StartEndPoints> deltas;  // 3 double for x,y,z start 3 for x,y,z end
@@ -143,6 +143,7 @@ public:
 
           ray->SetPoints(start, end);
           ray->GetIntersection(dist, entityName);
+
           if (!entityName.empty())
           {
             image._view(i, j) = fill;
