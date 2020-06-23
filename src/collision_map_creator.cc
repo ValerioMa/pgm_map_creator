@@ -213,7 +213,7 @@ public:
 
     ofs << "image: " << map_name << std::endl;
     ofs << "resolution: " << resolution << std::endl;
-    ofs << "origin: [" << x_orig << ", " << y_orig << ", " << z_orig << "]" << std::endl;
+    ofs << "origin: [" << x_orig << ", " << y_orig << ", 0 ]" << std::endl;
     ofs << "occupied_thresh: 0.65" << std::endl;
     ofs << "free_thresh: 0.35" << std::endl;
     ofs << "negate: 0" << std::endl;
