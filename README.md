@@ -1,5 +1,7 @@
 # pgm_map_creator
-Create pgm map from Gazebo world file for ROS localization
+Create pgm map from Gazebo world file for ROS localization.
+With this plugin is possible to specify a window along the z axis to consider
+and has improved the detection of perfectly vertical walls.
 
 ## Environment
 Tested on Ubuntu 18.04, ROS Melodic, Boost 1.65
