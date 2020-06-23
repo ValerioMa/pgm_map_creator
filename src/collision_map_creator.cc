@@ -2,6 +2,7 @@
 #define int_p_NULL (int*)NULL
 
 #include <math.h>
+#include <array>
 #include <boost/gil/extension/io/png_dynamic_io.hpp>
 #include <boost/gil/gil_all.hpp>
 #include <boost/shared_ptr.hpp>
@@ -49,8 +50,8 @@ public:
     std::cout << "Creating collision map with corners at (" << msg->upperleft().x() << ", " << msg->upperleft().y()
               << "), (" << msg->upperright().x() << ", " << msg->upperright().y() << "), (" << msg->lowerright().x()
               << ", " << msg->lowerright().y() << "), (" << msg->lowerleft().x() << ", " << msg->lowerleft().y()
-              << ") with collision projected from z = " << msg->height() << "\nResolution = " << msg->resolution()
-              << " m\n"
+              << ") with collision projected from z = (" << msg->minheight() << ", " << msg->maxheight()
+              << ") \nResolution = " << msg->resolution() << " m\n"
               << "Occupied spaces will be filled with: " << msg->threshold() << std::endl;
 
     double dX_vertical = msg->upperleft().x() - msg->lowerleft().x();
@@ -73,19 +74,21 @@ public:
       std::cout << "Image has a zero dimensions, check coordinates" << std::endl;
       return;
     }
-    double x, y;
-
+    double x, y, z;
+    const double z_min = msg->minheight();
+    const double z_max = msg->maxheight();
+    const double z_mean = 0.5 * (z_min + z_max);
     boost::gil::gray8_pixel_t fill(255 - msg->threshold());
     boost::gil::gray8_pixel_t blank(255);
     boost::gil::gray8_image_t image(count_horizontal, count_vertical);
 
-    double dist;
-    std::string entityName;
     ignition::math::Vector3d start, end;
-    start.Z(msg->height());
-    end.Z(0.001);
 
+#if GAZEBO_MAJOR_VERSION >= 8
     gazebo::physics::PhysicsEnginePtr engine = world->Physics();
+#else
+    gazebo::physics::PhysicsEnginePtr engine = world->GetPhysicsEngine();
+#endif
     engine->InitForThread();
     gazebo::physics::RayShapePtr ray = boost::dynamic_pointer_cast<gazebo::physics::RayShape>(
         engine->CreateShape("ray", gazebo::physics::CollisionPtr()));
@@ -93,25 +96,58 @@ public:
     std::cout << "Rasterizing model and checking collisions" << std::endl;
     boost::gil::fill_pixels(image._view, blank);
 
+    const double dZ = std::abs(z_max - z_min) / 2.;
+    const double dX = dX_horizontal / 2.;
+    const double dY = dY_horizontal / 2.;
+
+    typedef std::array<double, 6> StartEndPoints;
+    std::list<StartEndPoints> deltas;  // 3 double for x,y,z start 3 for x,y,z end
+
+    deltas.emplace_back(StartEndPoints{ -dX, 0., 0, dX, 0., 0. });
+    deltas.emplace_back(StartEndPoints{ 0., -dY, 0, 0., dY, 0. });
+    deltas.emplace_back(StartEndPoints{ 0., 0., -dZ, 0., 0., dZ });
+
+    double dist;
+    std::string entityName;
+
     for (int i = 0; i < count_vertical; ++i)
     {
-      std::cout << "Percent complete: " << i * 100.0 / count_vertical << std::endl;
-      x = i * dX_vertical + msg->lowerleft().x();
-      y = i * dY_vertical + msg->lowerleft().y();
+      std::cout << "Percent complete: " << std::setw(6) << std::setfill(' ')
+                << static_cast<double>(i) * 100.0 / static_cast<double>(count_vertical) << " %" << std::endl;
+      x = i * dX_vertical +
+          msg->lowerleft().x();  // TODO: check if the amcl need this --> + dX_vertical / 2. + dX_horizontal / 2.;
+      y = i * dY_vertical +
+          msg->lowerleft().y();  // TODO: check if the amcl need this --> dY_vertical / 2. + dY_horizontal / 2.;
+      z = z_mean;
       for (int j = 0; j < count_horizontal; ++j)
       {
         x += dX_horizontal;
         y += dY_horizontal;
 
-        start.X(x);
-        end.X(x);
-        start.Y(y);
-        end.Y(y);
-        ray->SetPoints(start, end);
-        ray->GetIntersection(dist, entityName);
-        if (!entityName.empty())
+        for (const auto& delta : deltas)
         {
-          image._view(i, j) = fill;
+          const double x_start = x + delta[0];
+          const double y_start = y + delta[1];
+          const double z_start = z + delta[2];
+
+          start.X(x_start);
+          start.Y(y_start);
+          start.Z(z_start);
+
+          const double x_end = x + delta[3];
+          const double y_end = y + delta[4];
+          const double z_end = z + delta[5];
+          end.X(x_end);
+          end.Y(y_end);
+          end.Z(z_end);
+
+          ray->SetPoints(start, end);
+          ray->GetIntersection(dist, entityName);
+          if (!entityName.empty())
+          {
+            image._view(i, j) = fill;
+            break;
+          }
         }
       }
     }
@@ -126,7 +162,7 @@ public:
       // Write to pgm (pnm p2)
       pgm_write_view(msg->filename(), view);
 
-      yaml_write(msg->filename(), msg->lowerleft().x(), msg->lowerleft().y(), msg->resolution());
+      yaml_write(msg->filename(), msg->lowerleft().x(), msg->lowerleft().y(), z_mean, msg->resolution());
     }
     std::cout << "Output location: " << msg->filename() << std::endl;
   }
@@ -156,7 +192,8 @@ public:
     ofs.close();
   }
 
-  void yaml_write(const std::string& filename, const double& x_min, const double& y_min, const double& resolution)
+  void yaml_write(const std::string& filename, const double& x_orig, const double& y_orig, const double z_orig,
+                  const double& resolution)
   {
     auto pos = filename.rfind("/");
     std::string map_name = ".pgm";
@@ -175,7 +212,7 @@ public:
 
     ofs << "image: " << map_name << std::endl;
     ofs << "resolution: " << resolution << std::endl;
-    ofs << "origin: [" << x_min << ", " << y_min << ", 0.0]" << std::endl;
+    ofs << "origin: [" << x_orig << ", " << y_orig << ", " << z_orig << "]" << std::endl;
     ofs << "occupied_thresh: 0.65" << std::endl;
     ofs << "free_thresh: 0.35" << std::endl;
     ofs << "negate: 0" << std::endl;
